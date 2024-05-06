@@ -45,9 +45,9 @@ fn setup_camera(mut commands: Commands) {
 struct PlayerCamera;
 
 #[derive(Component)]
-struct Collidable {
+struct Collidable; //{
     //collider: Collider
-}
+//}
 
 #[derive(Component)]
 struct Velocity {
