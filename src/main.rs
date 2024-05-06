@@ -46,8 +46,7 @@ struct PlayerCamera;
 
 #[derive(Component)]
 struct Collidable {
-    // use Collider::from_bevy_mesh()
-    collider: Collider
+    //collider: Collider
 }
 
 #[derive(Component)]
@@ -89,7 +88,6 @@ struct InputState {
     reader_motion: ManualEventReader<MouseMotion>,
 }
 
-// TODO: implement Mesh component
 fn move_camera(
     (mut query, mut primary_window, collidables): (Query<(&mut Transform, &mut Velocity, &mut Position, &mut ViewBobTimer, &PlayerCamera, &Collidable)>, Query<&mut Window, With<PrimaryWindow>>, Query<&Collidable>),
     (keys, mut paused, time, keybinds, mut state, motion): (Res<ButtonInput<KeyCode>>, ResMut<GameState>, Res<Time>, Res<Keybinds>, ResMut<InputState>, Res<Events<MouseMotion>>,)
@@ -117,13 +115,13 @@ fn move_camera(
             velocity.v.z *= 0.75;
 
             // gravity
-            velocity.v.y -= 10.0 * time.delta_seconds();
+            //velocity.v.y -= 10.0 * time.delta_seconds();
 
             position.v.x += velocity.v.x;
             // TODO: collision check
-            for collidable in collidables {
-                if 
-            }
+            //for collidable in collidables {
+            //    if 
+            //}
             position.v.y += velocity.v.y;
             // TODO: collision check
             position.v.z += velocity.v.z;
