@@ -44,10 +44,6 @@ fn setup_camera(mut commands: Commands) {
 #[derive(Component)]
 struct PlayerCamera;
 
-#[derive(Component)]
-struct Collidable; //{
-    //collider: Collider
-//}
 
 #[derive(Component)]
 struct Velocity {
@@ -75,7 +71,7 @@ struct Keybinds {
     sensitivity: f32   // Default 0.00006
 }
 
-#[derive(Resource, Default, PartialEq)]
+#[derive(Resource, Default, PartialEq, Debug)]
 enum GameState {
     #[default]
     Paused,
@@ -89,13 +85,13 @@ struct InputState {
 }
 
 fn move_camera(
-    (mut query, mut primary_window, collidables): (Query<(&mut Transform, &mut Velocity, &mut Position, &mut ViewBobTimer, &PlayerCamera, &Collidable)>, Query<&mut Window, With<PrimaryWindow>>, Query<&Collidable>),
+    (mut query, mut primary_window): (Query<(&mut Transform, &mut Velocity, &mut Position, &mut ViewBobTimer, &PlayerCamera)>, Query<&mut Window, With<PrimaryWindow>>),
     (keys, mut paused, time, keybinds, mut state, motion): (Res<ButtonInput<KeyCode>>, ResMut<GameState>, Res<Time>, Res<Keybinds>, ResMut<InputState>, Res<Events<MouseMotion>>,)
 ) {
     let mut window = primary_window.get_single_mut().unwrap();
 
-    if *paused == GameState::Paused  {
-        for (mut transform, mut velocity, mut position, mut viewBobTimer, _, player_collider) in query.iter_mut() {
+    if *paused == GameState::Playing  {
+        for (mut transform, mut velocity, mut position, mut viewBobTimer, _) in query.iter_mut() {
             let local_z = transform.local_z();
             if keys.pressed(keybinds.left) {
                 velocity.v += Vec3::new(local_z.z, 0., -local_z.x) * time.delta_seconds() * -10.0;
@@ -114,18 +110,7 @@ fn move_camera(
             velocity.v.x *= 0.75;
             velocity.v.z *= 0.75;
 
-            // gravity
-            //velocity.v.y -= 10.0 * time.delta_seconds();
-
-            position.v.x += velocity.v.x;
-            // TODO: collision check
-            //for collidable in collidables {
-            //    if 
-            //}
-            position.v.y += velocity.v.y;
-            // TODO: collision check
-            position.v.z += velocity.v.z;
-            // TODO: collision check
+            position.v += velocity.v;
 
             transform.translation = position.v;
 
@@ -140,15 +125,10 @@ fn move_camera(
 
             for ev in state.reader_motion.read(&motion) {
                 let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-                match window.cursor.grab_mode {
-                    CursorGrabMode::None => (),
-                    _ => {
-                        // Using smallest of height or width ensures equal vertical and horizontal sensitivity
-                        let window_scale = window.height().min(window.width());
-                        pitch -= (keybinds.sensitivity * ev.delta.y * window_scale).to_radians();
-                        yaw -= (keybinds.sensitivity * ev.delta.x * window_scale).to_radians();
-                    }
-                }
+                // Using smallest of height or width ensures equal vertical and horizontal sensitivity
+                let window_scale = window.height().min(window.width());
+                pitch -= (keybinds.sensitivity * ev.delta.y * window_scale).to_radians();
+                yaw -= (keybinds.sensitivity * ev.delta.x * window_scale).to_radians();
         
                 pitch = pitch.clamp(-1.54, 1.54);
         
@@ -163,28 +143,37 @@ fn move_camera(
         
         match *paused {
             GameState::Paused => {
-                window.cursor.grab_mode = CursorGrabMode::Confined;
-                window.cursor.visible = false;
+                window.cursor.grab_mode = CursorGrabMode::None;
+                window.cursor.visible = true;
                 *paused = GameState::Playing;
             }
             _ => {
-                window.cursor.grab_mode = CursorGrabMode::None;
-                window.cursor.visible = true;
+                window.cursor.grab_mode = CursorGrabMode::Confined;
+                window.cursor.visible = false;
                 *paused = GameState::Paused;
             }
         }
-        
     }
 }
 
-fn spawn_map(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn spawn_map(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, server: Res<AssetServer>) {
+    let mut map_transform = Transform::from_xyz(0.0, 0.0, 0.0);
+    map_transform.scale = Vec3::splat(50.0);
     commands.spawn((
         PbrBundle {
-            mesh: meshes.add(bevy::math::primitives::Cuboid::new(100.0, 1.0, 100.0)),
+            mesh: meshes.add(Cuboid::new(100.0, 100.0, 100.0)),
             material: materials.add(Color::WHITE),
+            transform: Transform::from_xyz(0.0, 0.0, 0.0),
             ..default()
-        },
-        Collidable
+        }
+    ));
+    commands.spawn((
+        PbrBundle {
+            mesh: server.load("map1.gltf#Mesh0"),
+            material: materials.add(Color::WHITE),
+            transform: map_transform,
+            ..default()
+        }
     )).with_children(|children| {
         children.spawn(PointLightBundle {
             point_light: PointLight {
@@ -198,6 +187,7 @@ fn spawn_map(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
             ..default()
         });
     });
+    print!("TEST");
 }
 
 fn confine_mouse(mut primary_window: Query<&mut Window, With<PrimaryWindow>>) {
@@ -236,7 +226,8 @@ fn main() {
         .init_resource::<GameState>()
         .init_resource::<InputState>()
         .add_systems(PreStartup, set_window_icon)
-        .add_systems(Startup, (setup_camera, spawn_map))
+        .add_systems(Startup, setup_camera)
+        .add_systems(Startup, spawn_map)
         .add_systems(Startup, confine_mouse)
         .add_systems(Update, move_camera)
         .run();
