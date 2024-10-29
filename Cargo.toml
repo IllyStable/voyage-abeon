@@ -20,9 +20,10 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 1
+debug = 1
 
 [profile.release]
-lto = true
+lto = "fat"
 
 
 [[bin]]
