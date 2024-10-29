@@ -17,14 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Initialise cache
-      uses: actions/cache@v2
-      with:
-           path: |
-               ~/.cargo/registry
-               ~/.cargo/git
-               target
-           key: ${{runner.os}}-cargo-${{hashFile("**/Cargo.lock")}}
-
+      uses: Swatinem/rust-cache@v2
     - name: Install OS dependencies
       run: sudo apt-get install g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0
     - name: Build
