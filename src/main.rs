@@ -11,13 +11,15 @@ use bevy::{
     core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping, motion_blur::{MotionBlur, MotionBlurBundle}, auto_exposure::{AutoExposurePlugin, AutoExposureSettings}, dof::{self, DepthOfFieldMode, DepthOfFieldSettings}},
     render::{camera::Viewport, view::RenderLayers, mesh::{Indices, VertexAttributeValues}},
     asset::LoadState,
-    pbr::{VolumetricFogSettings, VolumetricLight, ShadowFilteringMethod},
+    pbr::{VolumetricFogSettings, VolumetricLight, ShadowFilteringMethod, CascadeShadowConfigBuilder, NotShadowCaster},
 };
 use bevy_window_icon::WindowIconPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use avian3d::{math::*, prelude::*};
 use character_controller::*;
 use collider_divider::*;
+
+const CHUNK_SIZE: f32 = 30.0;
 
 #[derive(Resource)]
 struct Keybinds {
@@ -26,7 +28,7 @@ struct Keybinds {
 
 #[derive(Component)]
 struct Subcollider {
-    colliders: Vec<(Vec3, Collider)>,
+    colliders: Vec<(collider_divider::ChunkPos, Collider)>,
     chunk_size: f32,
 }
 
@@ -51,7 +53,8 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
             (30.0 as Scalar).to_radians()
         ),
         Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
-        Restitution::ZERO.with_combine_rule(CoefficientCombine::Min)
+        Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
+        //GravityScale(0.0),
     )).with_children(|b| {b.spawn((
         Camera3dBundle {
             transform: Transform::from_xyz(0.0, 0.8, 0.0),
@@ -337,33 +340,41 @@ fn update_minimap(
                 transform.translation.z
             ),
             Quat::from_euler(EulerRot::XYZ, 0.0, transform.rotation.y, 0.0),
-            Color::rgb(0.0, 1.0, 0.0)
+            Color::srgb(0.0, 1.0, 0.0)
         )
     }
 }
 
-fn select_subcollider(divided_colliders: Query<(Entity, &Subcollider, &Transform)>, player_query: Query<&Transform, With<PlayerCamera>>, mut commands: Commands) {
+fn select_subcollider(divided_colliders: Query<(Entity, &Subcollider, &Transform)>, player_query: Query<&Transform, With<PlayerCamera>>, mut commands: Commands, mut gizmos: Gizmos) {
     let default_pos = Transform::from_xyz(0.0, 0.0, 0.0);
     let player_pos = player_query.get_single().unwrap_or(&default_pos);
+
     for (entity, subcolliders, map_transform) in divided_colliders.iter() {
         commands.entity(entity).remove::<Collider>();
         
         for subcollider in subcolliders.colliders.clone() {
+            // i have no clue why we need to multiply by 1.725, but it works
+            let scaled_chunk_size = subcolliders.chunk_size * map_transform.scale.length() * 1.725;
             let relative_player_pos = player_pos.translation - map_transform.translation;
-            let player_pos_rounded = Vec3::new(
-                // conversion to round towards 0, can't use floor because that always rounds down,
-                // we want to round toward 0
-                (relative_player_pos.x / (subcolliders.chunk_size * map_transform.scale.length())).floor(), 
-                0.0,
-                (relative_player_pos.z / (subcolliders.chunk_size * map_transform.scale.length())).floor()
-            );
 
-            //println!("{:?}", player_pos_rounded);
-            //println!("{:?}", subcollider.0);
+            let player_pos_rounded = collider_divider::ChunkPos::from_vertex(&collider_divider::Vertex::from(relative_player_pos), &scaled_chunk_size);
+            
+            let mut collider_colour = LinearRgba::gray(0.65);
             
             if player_pos_rounded == subcollider.0 {
                 commands.entity(entity).insert(subcollider.1);
+                collider_colour = Color::srgb(1.0, 0.0, 1.0).into();
             }
+
+            // chunk gizmos, currently not working too well
+            /*gizmos.cuboid(
+                Transform::from_translation(
+                    Vec3::new((subcollider.0.x as f32 - 0.5) * scaled_chunk_size, 100.0, (subcollider.0.z as f32 - 0.5) * scaled_chunk_size)).with_scale(
+                        Vec3::new(scaled_chunk_size, 1000.0, scaled_chunk_size)
+                    )
+                ,
+                collider_colour,
+            );*/
         }
     }
 }
@@ -372,7 +383,7 @@ fn spawn_map(mut commands: Commands, handles: Res<AssetsCache>, gltf: Res<Assets
     mut materials: ResMut<Assets<StandardMaterial>>) {
 
 // skybox
-    commands.spawn(PbrBundle {
+    commands.spawn((PbrBundle {
         mesh: assets.add(Cuboid::new(1.0, 1.0, 1.0)),
         material: materials.add(StandardMaterial {
             base_color: Color::srgba(0.35, 0.48, 0.66, 1.0).into(),
@@ -382,10 +393,10 @@ fn spawn_map(mut commands: Commands, handles: Res<AssetsCache>, gltf: Res<Assets
         }),
         transform: Transform::from_scale(Vec3::splat(1_000_000.0)),
         ..default()
-    });
+    }, NotShadowCaster));
 
     let scene = gltf.get(&handles.map_gltf).unwrap();
-    let mesh = assets.get_mut(&mut gltf_assets.get_mut(&scene.meshes[0]).unwrap().primitives[1].mesh); 
+    let mesh = assets.get_mut(&mut gltf_assets.get_mut(&scene.meshes[0]).unwrap().primitives[1].mesh);
 
     commands.spawn((
         SceneBundle {
@@ -394,24 +405,32 @@ fn spawn_map(mut commands: Commands, handles: Res<AssetsCache>, gltf: Res<Assets
             ..default()
         },
         Subcollider {
-            colliders: collider_divider::split_subcolliders(&mesh.unwrap()),
+            colliders: collider_divider::split_subcolliders(&mesh.unwrap(), CHUNK_SIZE),
             chunk_size: 10.0,
         },
         RigidBody::Static,
+        CollisionMargin(0.1),
     ))
     .with_children(|children| {
         children.spawn(SpotLightBundle {
             spot_light: SpotLight {
                 radius: 10.0,
                 color: Color::srgb(1.0, 1.0, 1.0),
-                intensity: 1000000000000000.0,
+                intensity: 10000000000000000.0,
                 range: 1000000000.0,
                 outer_angle: 0.8,
+                shadows_enabled: true,
                 ..default()
             },
             transform: Transform::from_xyz(0.0, 75.0, 10000.0),
             ..default()
-        }).insert(VolumetricLight);
+        })
+        .insert(VolumetricLight)
+        .insert(CascadeShadowConfigBuilder {
+            first_cascade_far_bound: 0.3,
+            maximum_distance: 3.0,
+            ..default()
+        }.build());
     });
 }
 
@@ -456,6 +475,7 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(CharacterControllerPlugin)
         .add_plugins(PhysicsDebugPlugin::default())
+        .insert_gizmo_config(PhysicsGizmos::colliders(bevy::color::palettes::css::ORANGE.into()), GizmoConfig::default())
         // TODO: add this back when you get back home
         //.add_plugins(WindowIconPlugin::new("assets/app-icon.png"))
         .insert_state(AssetState::Loading)

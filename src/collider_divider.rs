@@ -5,8 +5,6 @@ use itertools::Itertools;
 use avian3d::collision::collider::Collider;
 use std::collections::HashMap;
 
-// if you're reading this, maybe don't.
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct Index {
     x: u32,
@@ -25,7 +23,7 @@ impl From<[u32;3]> for Index {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-struct Vertex {
+pub struct Vertex {
     x: f32,
     y: f32,
     z: f32,
@@ -51,19 +49,27 @@ impl From<[u32;3]> for Vertex {
     }
 }
 
+impl From<Vec3> for Vertex {
+    fn from(vec3: Vec3) -> Self {
+        Self {
+            x: vec3.x,
+            y: vec3.y,
+            z: vec3.z
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct ChunkPos {
-    x: i32,
-    y: i32,
-    z: i32,
+pub struct ChunkPos {
+    pub x: i32,   
+    pub z: i32,
 }
 
 impl ChunkPos {
-    fn from_vertex(vertex: &Vertex, chunk_size: &f32) -> ChunkPos {
+    pub fn from_vertex(vertex: &Vertex, chunk_size: &f32) -> ChunkPos {
         ChunkPos {
-            x: (vertex.x / *chunk_size).floor() as i32,
-            y: (vertex.y / *chunk_size).floor() as i32,
-            z: (vertex.z / *chunk_size).floor() as i32,
+            x: (vertex.x / (*chunk_size / 2.0)).floor() as i32,
+            z: (vertex.z / (*chunk_size / 2.0)).floor() as i32,
         }
     }
 }
@@ -75,14 +81,12 @@ struct ChunkData {
     global_local_index_map: HashMap<u32, u32>,
 }
 
-fn split_mesh(vertices: Vec<Vertex>, indices: Vec<Index>) -> HashMap<ChunkPos, (Vec<Vertex>, Vec<Index>)> {
-    const CHUNK_SIZE: f32 = 20.0;
-    
+fn split_mesh(vertices: Vec<Vertex>, indices: Vec<Index>, chunk_size: f32) -> HashMap<ChunkPos, (Vec<Vertex>, Vec<Index>)> {
     let mut chunks: HashMap<ChunkPos, ChunkData> = HashMap::new();
 
     // assign vertices to chunks
     for (global_idx, vertex) in vertices.iter().enumerate() {
-        let chunk_pos = ChunkPos::from_vertex(&vertex, &CHUNK_SIZE);
+        let chunk_pos = ChunkPos::from_vertex(&vertex, &chunk_size);
         let entry = chunks.entry(chunk_pos).or_insert(ChunkData {
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -96,9 +100,9 @@ fn split_mesh(vertices: Vec<Vertex>, indices: Vec<Index>) -> HashMap<ChunkPos, (
     // assign indices to chunks 
     for index in indices {
         let vert_chunks = [
-            ChunkPos::from_vertex(&vertices[index.x as usize], &CHUNK_SIZE),
-            ChunkPos::from_vertex(&vertices[index.y as usize], &CHUNK_SIZE),
-            ChunkPos::from_vertex(&vertices[index.z as usize], &CHUNK_SIZE),
+            ChunkPos::from_vertex(&vertices[index.x as usize], &chunk_size),
+            ChunkPos::from_vertex(&vertices[index.y as usize], &chunk_size),
+            ChunkPos::from_vertex(&vertices[index.z as usize], &chunk_size),
         ];
 
         // if all are in the same chunk, add triangle to it 
@@ -139,7 +143,7 @@ fn split_mesh(vertices: Vec<Vertex>, indices: Vec<Index>) -> HashMap<ChunkPos, (
                         }
                     }
 
-                    if added_new_verts || ChunkPos::from_vertex(&vertices[index.x as usize], &CHUNK_SIZE) == *pos {
+                    if added_new_verts || ChunkPos::from_vertex(&vertices[index.x as usize], &chunk_size) == *pos {
                         chunk.indices.push(Index {x: local_index[0], y: local_index[1], z: local_index[2]});
                     }
                 }
@@ -182,15 +186,14 @@ fn to_vertices(mesh: &Mesh) -> Option<(Vec<Vertex>, Vec<Index>)> {
     Some((vtx, idx))
 }
 
-fn split_bevy_mesh(mesh: &Mesh) -> HashMap<ChunkPos, (Vec<Vertex>, Vec<Index>)> {
+fn split_bevy_mesh(mesh: &Mesh, chunk_size: f32) -> HashMap<ChunkPos, (Vec<Vertex>, Vec<Index>)> {
     let mesh = to_vertices(mesh).unwrap_or((vec![], vec![]));
-    split_mesh(mesh.0, mesh.1)
+    split_mesh(mesh.0, mesh.1, chunk_size)
 }
 
-pub fn split_subcolliders(mesh: &Mesh) -> Vec<(Vec3, Collider)> {
-    let meshlets: Vec<(ChunkPos, (Vec<Vertex>, Vec<Index>))>  = split_bevy_mesh(mesh).into_iter().filter(|(pos, (verts, indices))| indices.len() > 0).collect();
+pub fn split_subcolliders(mesh: &Mesh, chunk_size: f32) -> Vec<(ChunkPos, Collider)> {
+    let meshlets: Vec<(ChunkPos, (Vec<Vertex>, Vec<Index>))>  = split_bevy_mesh(mesh, chunk_size).into_iter().filter(|(pos, (verts, indices))| indices.len() > 0).collect();
 
-    println!("split stage");
     let mut subcolliders = Vec::new();
     for meshlet in meshlets {
         let vertices: Vec<Vec3> = meshlet.1.0.into_iter().map(|vert|{
@@ -200,10 +203,7 @@ pub fn split_subcolliders(mesh: &Mesh) -> Vec<(Vec3, Collider)> {
             idx
         }).map(|idx| [idx.x, idx.y, idx.z]).collect();
 
-        //println!("{:?}", indices);
-        println!("{:?}", meshlet.0);
-
-        subcolliders.push((Vec3::new(meshlet.0.x as f32, 0.0, meshlet.0.z as f32), Collider::trimesh(vertices, indices)));
+        subcolliders.push((meshlet.0, Collider::trimesh(vertices, indices)));
     }
 
     subcolliders
