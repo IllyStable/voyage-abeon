@@ -191,8 +191,16 @@ struct CameraRotation(Quat);
 #[derive(Resource, Default)]
 struct State{reader_motion: ManualEventReader<MouseMotion>}
 
-fn mouse_input(mut state: ResMut<State>, mut yaw: ResMut<Yaw>, movement_keybinds: Res<MovementKeybinds>, camera_rotation: Res<CameraRotation>, mut movement_event_writer: EventWriter<MovementAction>, mut windows: Query<&mut Window, With<PrimaryWindow>>, mouse_motion: Res<Events<MouseMotion>>) {
-    let mut window = windows.get_single_mut().unwrap();
+fn mouse_input(
+    mut state: ResMut<State>, 
+    mut yaw: ResMut<Yaw>, 
+    movement_keybinds: Res<MovementKeybinds>, 
+    camera_rotation: Res<CameraRotation>, 
+    mut movement_event_writer: EventWriter<MovementAction>, 
+    windows: Query<&Window, With<PrimaryWindow>>, 
+    mouse_motion: Res<Events<MouseMotion>>
+) {
+    let window = windows.get_single().unwrap();
 
     for ev in state.reader_motion.read(&mouse_motion) {
         let mut pitch;

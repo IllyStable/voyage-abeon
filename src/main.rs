@@ -3,21 +3,18 @@ mod collider_divider;
 
 use bevy::{
     window::{WindowTheme, WindowMode, PresentMode, PrimaryWindow, CursorGrabMode, WindowResized},
+    winit::WinitWindows,
     prelude::*,
     diagnostic::LogDiagnosticsPlugin,
-    winit::WinitWindows,
-    input::mouse::MouseMotion,
-    ecs::{event::ManualEventReader, schedule::ScheduleLabel},
-    core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping, motion_blur::{MotionBlur, MotionBlurBundle}, auto_exposure::{AutoExposurePlugin, AutoExposureSettings}, dof::{self, DepthOfFieldMode, DepthOfFieldSettings}},
-    render::{camera::Viewport, view::RenderLayers, mesh::{Indices, VertexAttributeValues}},
+    core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping, motion_blur::{MotionBlur, MotionBlurBundle}, auto_exposure::{AutoExposurePlugin, AutoExposureSettings}, dof::{DepthOfFieldMode, DepthOfFieldSettings}},
+    render::{camera::Viewport, view::RenderLayers},
     asset::LoadState,
     pbr::{VolumetricFogSettings, VolumetricLight, ShadowFilteringMethod, CascadeShadowConfigBuilder, NotShadowCaster},
 };
-use bevy_window_icon::WindowIconPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use avian3d::{math::*, prelude::*};
+use winit::window::Icon;
 use character_controller::*;
-use collider_divider::*;
 
 const CHUNK_SIZE: f32 = 30.0;
 
@@ -37,11 +34,12 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
     let cube_mesh = meshes.add(Cuboid::default());    
     camera_pos.look_at(Vec3::ZERO, Vec3::Y);
     commands.spawn((
-        PlayerCamera,
+        PlayerRigidbody,
         ColliderDensity(985.0),
         ViewBobTimer {
             timer: 0.0
         },
+        // `SpatialBundle` will get removed in Bevy 0.15
         SpatialBundle {
             transform: camera_pos,
             ..SpatialBundle::default()
@@ -54,7 +52,6 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         ),
         Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
         Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
-        //GravityScale(0.0),
     )).with_children(|b| {b.spawn((
         Camera3dBundle {
             transform: Transform::from_xyz(0.0, 0.8, 0.0),
@@ -71,6 +68,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
             ..default()
         },
         BloomSettings::NATURAL,
+        PlayerCamera,
         VolumetricFogSettings {
             // This value is explicitly set to 0 since we have no environment map light
             ambient_intensity: 0.0,
@@ -143,6 +141,9 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
 struct PlayerCamera;
 
 #[derive(Component)]
+struct PlayerRigidbody;
+
+#[derive(Component)]
 struct MinimapCamera;
 
 #[derive(Component)]
@@ -183,7 +184,6 @@ fn check_assets_ready(
     mut state: ResMut<NextState<AssetState>>
 ) {
     let mut iterator = loading.0.iter().map(|h| h.id());
-    let amount_assets_loading = loading.0.len();
 
     state.set(AssetState::Loaded);
 
@@ -215,41 +215,22 @@ enum GameState {
 #[derive(Resource, PartialEq, Debug)]
 struct GameTime(f32);
 
-/// Keeps track of mouse motion events, pitch, and yaw
-#[derive(Resource, Default)]
-struct InputState {
-    reader_motion: ManualEventReader<MouseMotion>,
-}
 
 fn move_camera(
-    (mut query, mut primary_window, mut minimap_camera_query): 
-        (
-            Query<(&Transform, &mut ViewBobTimer, &PlayerCamera, Entity, &LinearVelocity)>, 
+    (rigidbody, mut camera, mut primary_window, mut minimap_camera_query):         (
+            // ugh with/without hell
+            Query<(&Transform, &LinearVelocity), (With<PlayerRigidbody>, Without<PlayerCamera>)>,
+            Query<(&mut Transform, &mut ViewBobTimer), (With<PlayerCamera>, Without<PlayerRigidbody>)>,
             Query<&mut Window, With<PrimaryWindow>>,
-            Query<(&mut Camera, &mut Transform), (With<MinimapCamera>, Without<PlayerCamera>)>
+            Query<(&mut Camera, &mut Transform), (With<MinimapCamera>, Without<PlayerCamera>, Without<PlayerRigidbody>)>
         ),
-    (keys, mut paused, time, mut state, mouse_motion, keybinds): (Res<ButtonInput<KeyCode>>, ResMut<GameState>, Res<Time>, ResMut<InputState>, Res<Events<MouseMotion>>, Res<Keybinds>),
-    mut commands: Commands
+    (keys, mut paused, keybinds): (Res<ButtonInput<KeyCode>>, ResMut<GameState>, Res<Keybinds>)
 ) {
     let mut window = primary_window.get_single_mut().unwrap();
 
     if *paused == GameState::Playing  {
-        for (transform, mut view_bob_timer, _, entity, velocity) in query.iter_mut() {
-            /*let local_z = transform.local_z();
-            let mut horizontal_movement = 0.0;
-            if keys.pressed(keybinds.left) {
-                velocity.linvel += Vec3::new(local_z.z, 0., -local_z.x) * time.delta_seconds() * -50.0;
-            }
-            if keys.pressed(keybinds.right) {
-                velocity.linvel += Vec3::new(local_z.z, 0., -local_z.x) * time.delta_seconds() * 50.0;
-            }
-            if keys.pressed(keybinds.forward) {
-                velocity.linvel -= Vec3::new(local_z.x, 0., local_z.z) * time.delta_seconds() * 50.0;
-            }
-            if keys.pressed(keybinds.backward) {
-                velocity.linvel -= Vec3::new(local_z.x, 0., local_z.z) * time.delta_seconds() * -50.0;
-            }*/
-
+        for (mut transform, mut view_bob_timer) in camera.iter_mut() { 
+            let Ok((rigidbody_transform, rigidbody_velocity)) = rigidbody.get_single() else {todo!()};
             // TODO: migrate the following code into other functions
 
             for (_, mut minimaptransform) in minimap_camera_query.iter_mut() {
@@ -258,13 +239,13 @@ fn move_camera(
                 minimaptransform.translation.z = transform.translation.z;
             }
 
-            // TODO: readd position component
-            //transform.translation.y = controller.translation.unwrap_or(Vec3::splat(0.0)).y + (view_bob_timer.timer * 0.5).sin() * 0.2;
+            //TODO: fix viewbob
+            transform.translation.y = rigidbody_transform.translation.y + (view_bob_timer.timer * 0.5).sin() * 0.2;
 
-            view_bob_timer.timer += velocity.length();
+            view_bob_timer.timer += rigidbody_velocity.length();
 
             // prevent timer from overflowing u32 capacity
-            if view_bob_timer.timer.sin() == 0.0 ||  velocity.length() == 0.0 {
+            if view_bob_timer.timer.sin() == 0.0 || rigidbody_velocity.length() == 0.0 {
                 view_bob_timer.timer = 0.0;
             }
         } //else {
@@ -345,7 +326,11 @@ fn update_minimap(
     }
 }
 
-fn select_subcollider(divided_colliders: Query<(Entity, &Subcollider, &Transform)>, player_query: Query<&Transform, With<PlayerCamera>>, mut commands: Commands, mut gizmos: Gizmos) {
+fn select_subcollider(
+    divided_colliders: Query<(Entity, &Subcollider, &Transform)>, 
+    player_query: Query<&Transform, With<PlayerRigidbody>>, 
+    mut commands: Commands
+) {
     let default_pos = Transform::from_xyz(0.0, 0.0, 0.0);
     let player_pos = player_query.get_single().unwrap_or(&default_pos);
 
@@ -359,30 +344,22 @@ fn select_subcollider(divided_colliders: Query<(Entity, &Subcollider, &Transform
 
             let player_pos_rounded = collider_divider::ChunkPos::from_vertex(&collider_divider::Vertex::from(relative_player_pos), &scaled_chunk_size);
             
-            let mut collider_colour = LinearRgba::gray(0.65);
-            
             if player_pos_rounded == subcollider.0 {
                 commands.entity(entity).insert(subcollider.1);
-                collider_colour = Color::srgb(1.0, 0.0, 1.0).into();
-            }
-
-            // chunk gizmos, currently not working too well
-            /*gizmos.cuboid(
-                Transform::from_translation(
-                    Vec3::new((subcollider.0.x as f32 - 0.5) * scaled_chunk_size, 100.0, (subcollider.0.z as f32 - 0.5) * scaled_chunk_size)).with_scale(
-                        Vec3::new(scaled_chunk_size, 1000.0, scaled_chunk_size)
-                    )
-                ,
-                collider_colour,
-            );*/
+            } 
         }
     }
 }
 
-fn spawn_map(mut commands: Commands, handles: Res<AssetsCache>, gltf: Res<Assets<bevy::gltf::Gltf>>, mut gltf_assets: ResMut<Assets<bevy::gltf::GltfMesh>>, mut assets: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>) {
-
-// skybox
+fn spawn_map(
+    mut commands: Commands, 
+    handles: Res<AssetsCache>, 
+    gltf: Res<Assets<bevy::gltf::Gltf>>, 
+    mut gltf_assets: ResMut<Assets<bevy::gltf::GltfMesh>>, 
+    mut assets: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>
+) {
+    // skybox
     commands.spawn((PbrBundle {
         mesh: assets.add(Cuboid::new(1.0, 1.0, 1.0)),
         material: materials.add(StandardMaterial {
@@ -431,6 +408,30 @@ fn spawn_map(mut commands: Commands, handles: Res<AssetsCache>, gltf: Res<Assets
             maximum_distance: 3.0,
             ..default()
         }.build());
+
+        children.spawn((ColliderConstructor::Cuboid {
+                x_length: 2000.0, 
+                y_length: 2000.0, 
+                z_length: 1.0,
+            }, Transform::from_xyz(-500.0, -500.0, 1000.0)));
+
+        children.spawn((ColliderConstructor::Cuboid {
+                x_length: 2000.0, 
+                y_length: 2000.0, 
+                z_length: 1.0,
+            }, Transform::from_xyz(-500.0, -500.0, -1000.0)));
+
+        children.spawn((ColliderConstructor::Cuboid {
+                x_length: 1.0, 
+                y_length: 2000.0, 
+                z_length: 2000.0,
+            }, Transform::from_xyz(1000.0, -500.0, -500.0)));
+
+        children.spawn((ColliderConstructor::Cuboid {
+                x_length: 1.0, 
+                y_length: 2000.0, 
+                z_length: 2000.0,
+            }, Transform::from_xyz(-1000.0, -500.0, -500.0)));
     });
 }
 
@@ -438,6 +439,29 @@ fn confine_mouse(mut primary_window: Query<&mut Window, With<PrimaryWindow>>) {
     let mut window = primary_window.get_single_mut().unwrap();
     window.cursor.grab_mode = CursorGrabMode::Confined;
     window.cursor.visible = false;
+}
+
+
+fn set_window_icon(
+    // we have to use `NonSend` here
+    windows: NonSend<WinitWindows>,
+) {
+    // here we use the `image` crate to load our icon data from a png file
+    // this is not a very bevy-native solution, but it will do
+    let (icon_rgba, icon_width, icon_height) = {
+        let image = image::open("assets/app-icon.png")
+            .expect("Failed to open icon path")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        let rgba = image.into_raw();
+        (rgba, width, height)
+    };
+    let icon = Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap();
+
+    // do it for all windows
+    for window in windows.windows.values() {
+        window.set_window_icon(Some(icon.clone()));
+    }
 }
 
 //TODO: implement this
@@ -453,8 +477,9 @@ enum AssetState {
 }
 
 fn main() {
-    App::new()
-        .add_plugins((
+    let mut app = App::new();
+
+    app.add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "The Voyage of the Abeona".into(),
@@ -473,19 +498,20 @@ fn main() {
         .add_plugins(WorldInspectorPlugin::new())
         .add_plugins(AutoExposurePlugin)
         .add_plugins(PhysicsPlugins::default())
-        .add_plugins(CharacterControllerPlugin)
-        .add_plugins(PhysicsDebugPlugin::default())
-        .insert_gizmo_config(PhysicsGizmos::colliders(bevy::color::palettes::css::ORANGE.into()), GizmoConfig::default())
-        // TODO: add this back when you get back home
-        //.add_plugins(WindowIconPlugin::new("assets/app-icon.png"))
-        .insert_state(AssetState::Loading)
+        .add_plugins(CharacterControllerPlugin);
+
+    /*app.add_plugins(PhysicsDebugPlugin::default())
+        .insert_gizmo_config(PhysicsGizmos::colliders(bevy::color::palettes::css::ORANGE.into()), GizmoConfig::default());
+      */ 
+    app.insert_state(AssetState::Loading)
         // TODO: save player preferences
         .init_resource::<GameState>()
-        .init_resource::<InputState>()
         .init_resource::<AssetLoadingTracker>()
-        .insert_resource(Keybinds { pause: KeyCode::Escape })
-        .add_systems(PreStartup, load_assets)
+        .insert_resource(Keybinds { pause: KeyCode::Escape });
+
+    app.add_systems(PreStartup, load_assets)
         .add_systems(PreStartup, setup_camera)
+        .add_systems(PreStartup, set_window_icon)
         .add_systems(Startup, setup_minimap)
         .add_systems(Startup, confine_mouse)
         .add_systems(OnEnter(AssetState::Loaded), spawn_map)

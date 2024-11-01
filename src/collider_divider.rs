@@ -192,7 +192,9 @@ fn split_bevy_mesh(mesh: &Mesh, chunk_size: f32) -> HashMap<ChunkPos, (Vec<Verte
 }
 
 pub fn split_subcolliders(mesh: &Mesh, chunk_size: f32) -> Vec<(ChunkPos, Collider)> {
-    let meshlets: Vec<(ChunkPos, (Vec<Vertex>, Vec<Index>))>  = split_bevy_mesh(mesh, chunk_size).into_iter().filter(|(pos, (verts, indices))| indices.len() > 0).collect();
+    let meshlets: Vec<(ChunkPos, (Vec<Vertex>, Vec<Index>))> = split_bevy_mesh(mesh, chunk_size).into_iter()
+        .filter(|(_, (_, indices))| indices.len() > 0)
+        .collect();
 
     let mut subcolliders = Vec::new();
     for meshlet in meshlets {
