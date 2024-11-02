@@ -1,5 +1,6 @@
 use avian3d::{math::*, prelude::*};
 use bevy::{ecs::query::Has, prelude::*, window::PrimaryWindow, input::mouse::MouseMotion, ecs::event::ManualEventReader};
+use crate::GameState;
 
 #[derive(Resource)]
 struct MovementKeybinds {
@@ -27,6 +28,14 @@ impl Plugin for CharacterControllerPlugin {
             )
                 .chain(),
         );
+        app.add_systems(
+            OnEnter(GameState::Paused),
+            pause
+        );
+        app.add_systems(
+            OnExit(GameState::Paused),
+            resume 
+        );
         app.init_resource::<Yaw>();
         app.init_resource::<CameraRotation>();
         app.init_resource::<State>();
@@ -39,6 +48,14 @@ impl Plugin for CharacterControllerPlugin {
             sensitivity: 0.0006
         });
     }
+}
+
+fn pause(mut time: ResMut<Time<Physics>>) {
+    time.pause();
+}
+
+fn resume(mut time: ResMut<Time<Physics>>) {
+    time.unpause();
 }
 
 /// An event sent for a movement input action.
@@ -290,10 +307,15 @@ fn movement(
         &mut Transform,
         Has<Grounded>,
     )>,
+    game_state: Res<bevy::prelude::State<GameState>>
 ) {
     // Precision is adjusted so that the example works with
     // both the `f32` and `f64` features. Otherwise you don't need this.
     let delta_time = time.delta_seconds_f64().adjust_precision();
+
+    if *game_state.get() == GameState::Paused {
+        return;
+    } 
 
     for event in movement_event_reader.read() {
         for (movement_acceleration, jump_impulse, mut linear_velocity, mut transform, is_grounded) in

@@ -223,7 +223,7 @@ fn check_assets_ready(
 }
 
 // TODO: migrate to state machine
-#[derive(Resource, Default, PartialEq, Debug)]
+#[derive(States, Default, PartialEq, Debug, Eq, Hash, Clone, Copy)]
 enum GameState {
     Paused,
     #[default]
@@ -238,11 +238,11 @@ fn move_camera(
             Query<&mut Window, With<PrimaryWindow>>,
             Query<(&mut Camera, &mut Transform), (With<MinimapCamera>, Without<PlayerCamera>, Without<PlayerRigidbody>)>
         ),
-    (keys, mut paused, keybinds): (Res<ButtonInput<KeyCode>>, ResMut<GameState>, Res<Keybinds>)
+    (keys, mut paused, game_state, keybinds): (Res<ButtonInput<KeyCode>>, ResMut<NextState<GameState>>, Res<State<GameState>>, Res<Keybinds>)
 ) {
     let mut window = primary_window.get_single_mut().unwrap();
 
-    if *paused == GameState::Playing  {
+    if *game_state.get() == GameState::Playing  {
         for (mut transform, mut view_bob_timer) in camera.iter_mut() { 
             let Ok((rigidbody_transform, rigidbody_velocity)) = rigidbody.get_single() else {todo!()};
             // TODO: migrate the following code into other functions
@@ -262,25 +262,20 @@ fn move_camera(
             if view_bob_timer.timer.sin() == 0.0 || rigidbody_velocity.length() == 0.0 {
                 view_bob_timer.timer = 0.0;
             }
-        } //else {
-            
-        //}
+        }
     }
 
-    
-
-    if keys.just_pressed(keybinds.pause) {
-        
-        match *paused {
+    if keys.just_pressed(keybinds.pause) { 
+        match game_state.get() {
             GameState::Paused => {
                 window.cursor.grab_mode = CursorGrabMode::Confined;
                 window.cursor.visible = false;
-                *paused = GameState::Playing;
+                paused.set(GameState::Playing);
             }
             _ => {
                 window.cursor.grab_mode = CursorGrabMode::None;
                 window.cursor.visible = true;
-                *paused = GameState::Paused;
+                paused.set(GameState::Paused);
             }
         }
     }
@@ -526,7 +521,7 @@ fn main() {
       */ 
     app.insert_state(AssetState::Loading)
         // TODO: save player preferences
-        .init_resource::<GameState>()
+        .init_state::<GameState>()
         .init_resource::<AssetLoadingTracker>()
         .insert_resource(Keybinds { pause: KeyCode::Escape });
 
