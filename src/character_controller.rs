@@ -134,7 +134,7 @@ impl CharacterControllerBundle {
                 Quaternion::default(),
                 Dir3::NEG_Y,
             )
-            .with_max_time_of_impact(0.2),
+            .with_max_time_of_impact(0.5),
             locked_axes: LockedAxes::ROTATION_LOCKED,
             movement: MovementBundle::default(),
         }

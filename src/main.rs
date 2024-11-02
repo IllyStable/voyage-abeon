@@ -27,6 +27,17 @@ struct Keybinds {
 struct Subcollider {
     colliders: Vec<(collider_divider::ChunkPos, Collider)>,
     chunk_size: f32,
+    active_colliders: Vec<Entity>,
+}
+
+impl Subcollider {
+    pub fn new(colliders: Vec<(collider_divider::ChunkPos, Collider)>, chunk_size: f32) -> Self {
+        Self {
+            colliders: colliders,
+            chunk_size: chunk_size,
+            active_colliders: Vec::new()
+        }
+    }
 }
 
 fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<Mesh>>,) {
@@ -47,11 +58,13 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         CharacterControllerBundle::new(Collider::capsule(0.11, 1.6)).with_movement(
             80.0,
             0.92,
-            18.0,
+            22.0,
             (30.0 as Scalar).to_radians()
         ),
         Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
         Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
+        ChunkLoader,
+        GravityScale(4.0),
     )).with_children(|b| {b.spawn((
         Camera3dBundle {
             transform: Transform::from_xyz(0.0, 0.8, 0.0),
@@ -88,7 +101,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
             directional_light_exponent: 30.0,
             falloff: FogFalloff::from_visibility_colors(
-                800.0, // distance in world units up to which objects retain visibility (>= 5% contrast)
+                1000.0, // distance in world units up to which objects retain visibility (>= 5% contrast)
                 Color::srgb(0.35, 0.5, 0.66), // atmospheric extinction color (after light is lost due to absorption by atmospheric particles)
                 Color::srgb(0.8, 0.844, 1.0), // atmospheric inscattering color (light gained due to scattering from the sun)
             ),
@@ -98,7 +111,8 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         },
         DepthOfFieldSettings {
             mode: DepthOfFieldMode::Bokeh,
-            focal_distance: 100.0,
+            focal_distance: 40.0,
+            aperture_f_stops: 0.19, // calculated from human eye
             ..default()
         },
         ShadowFilteringMethod::Gaussian,
@@ -134,6 +148,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         },
         RigidBody::Dynamic,
         Collider::cuboid(1.0, 1.0, 1.0),
+        ChunkLoader
     ));
 }
 
@@ -142,6 +157,9 @@ struct PlayerCamera;
 
 #[derive(Component)]
 struct PlayerRigidbody;
+
+#[derive(Component)]
+struct ChunkLoader;
 
 #[derive(Component)]
 struct MinimapCamera;
@@ -212,10 +230,6 @@ enum GameState {
     Playing
 }
 
-#[derive(Resource, PartialEq, Debug)]
-struct GameTime(f32);
-
-
 fn move_camera(
     (rigidbody, mut camera, mut primary_window, mut minimap_camera_query):         (
             // ugh with/without hell
@@ -240,7 +254,7 @@ fn move_camera(
             }
 
             //TODO: fix viewbob
-            transform.translation.y = rigidbody_transform.translation.y + (view_bob_timer.timer * 0.5).sin() * 0.2;
+            transform.translation.y = rigidbody_transform.translation.y + (view_bob_timer.timer * 0.2).sin() * 0.2 + 0.2;
 
             view_bob_timer.timer += rigidbody_velocity.length();
 
@@ -327,27 +341,34 @@ fn update_minimap(
 }
 
 fn select_subcollider(
-    divided_colliders: Query<(Entity, &Subcollider, &Transform)>, 
-    player_query: Query<&Transform, With<PlayerRigidbody>>, 
+    mut divided_colliders: Query<(Entity, &mut Subcollider, &Transform)>,
+    loader_query: Query<&Transform, With<ChunkLoader>>, 
     mut commands: Commands
 ) {
-    let default_pos = Transform::from_xyz(0.0, 0.0, 0.0);
-    let player_pos = player_query.get_single().unwrap_or(&default_pos);
-
-    for (entity, subcolliders, map_transform) in divided_colliders.iter() {
-        commands.entity(entity).remove::<Collider>();
-        
-        for subcollider in subcolliders.colliders.clone() {
-            // i have no clue why we need to multiply by 1.725, but it works
-            let scaled_chunk_size = subcolliders.chunk_size * map_transform.scale.length() * 1.725;
-            let relative_player_pos = player_pos.translation - map_transform.translation;
-
-            let player_pos_rounded = collider_divider::ChunkPos::from_vertex(&collider_divider::Vertex::from(relative_player_pos), &scaled_chunk_size);
-            
-            if player_pos_rounded == subcollider.0 {
-                commands.entity(entity).insert(subcollider.1);
-            } 
+    // nested loop hell
+    for (entity, mut subcolliders, map_transform) in divided_colliders.iter_mut() {
+        for entity in subcolliders.active_colliders.clone() {
+            commands.entity(entity).despawn();
         }
+
+        subcolliders.active_colliders.clear();
+
+        for player_pos in loader_query.iter(){
+            for subcollider in subcolliders.colliders.clone() {
+                // i have no clue why we need to multiply by 1.725, but it works
+                let scaled_chunk_size = subcolliders.chunk_size * map_transform.scale.length() * 1.725;
+                let relative_player_pos = player_pos.translation - map_transform.translation;
+
+                let player_pos_rounded = collider_divider::ChunkPos::from_vertex(&collider_divider::Vertex::from(relative_player_pos), &scaled_chunk_size);
+            
+                if player_pos_rounded == subcollider.0 {
+                    let entity_subcollider = commands.spawn(subcollider.1).id();
+                    subcolliders.active_colliders.push(entity_subcollider);
+                    commands.entity(entity).add_child(entity_subcollider);
+                } 
+            }
+        }
+        
     }
 }
 
@@ -381,12 +402,12 @@ fn spawn_map(
             scene: handles.map_scene.clone(),
             ..default()
         },
-        Subcollider {
-            colliders: collider_divider::split_subcolliders(&mesh.unwrap(), CHUNK_SIZE),
-            chunk_size: 10.0,
-        },
+        Subcollider::new(
+            collider_divider::split_subcolliders(&mesh.unwrap(), CHUNK_SIZE),
+            10.0,
+        ),
         RigidBody::Static,
-        CollisionMargin(0.1),
+        CollisionMargin(0.2),
     ))
     .with_children(|children| {
         children.spawn(SpotLightBundle {
@@ -410,28 +431,28 @@ fn spawn_map(
         }.build());
 
         children.spawn((ColliderConstructor::Cuboid {
-                x_length: 2000.0, 
-                y_length: 2000.0, 
+                x_length: 200.0, 
+                y_length: 200.0, 
                 z_length: 1.0,
-            }, Transform::from_xyz(-500.0, -500.0, 1000.0)));
+            }, Transform::from_xyz(-50.0, 0.0, 50.0)));
 
         children.spawn((ColliderConstructor::Cuboid {
-                x_length: 2000.0, 
-                y_length: 2000.0, 
+                x_length: 200.0, 
+                y_length: 200.0, 
                 z_length: 1.0,
-            }, Transform::from_xyz(-500.0, -500.0, -1000.0)));
+            }, Transform::from_xyz(-50.0, 0.0, -50.0)));
 
         children.spawn((ColliderConstructor::Cuboid {
                 x_length: 1.0, 
-                y_length: 2000.0, 
-                z_length: 2000.0,
-            }, Transform::from_xyz(1000.0, -500.0, -500.0)));
+                y_length: 200.0, 
+                z_length: 200.0,
+            }, Transform::from_xyz(50.0, 0.0, -50.0)));
 
         children.spawn((ColliderConstructor::Cuboid {
                 x_length: 1.0, 
-                y_length: 2000.0, 
-                z_length: 2000.0,
-            }, Transform::from_xyz(-1000.0, -500.0, -500.0)));
+                y_length: 200.0, 
+                z_length: 200.0,
+            }, Transform::from_xyz(-50.0, 0.0, 50.0)));
     });
 }
 
@@ -500,8 +521,8 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(CharacterControllerPlugin);
 
-    /*app.add_plugins(PhysicsDebugPlugin::default())
-        .insert_gizmo_config(PhysicsGizmos::colliders(bevy::color::palettes::css::ORANGE.into()), GizmoConfig::default());
+    //app.add_plugins(PhysicsDebugPlugin::default());
+      /*  .insert_gizmo_config(PhysicsGizmos::colliders(bevy::color::palettes::css::ORANGE.into()), GizmoConfig::default());
       */ 
     app.insert_state(AssetState::Loading)
         // TODO: save player preferences
