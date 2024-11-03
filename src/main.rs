@@ -46,10 +46,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
     camera_pos.look_at(Vec3::ZERO, Vec3::Y);
     commands.spawn((
         PlayerRigidbody,
-        ColliderDensity(985.0),
-        ViewBobTimer {
-            timer: 0.0
-        },
+        ColliderDensity(985.0), 
         // `SpatialBundle` will get removed in Bevy 0.15
         SpatialBundle {
             transform: camera_pos,
@@ -82,6 +79,9 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         },
         BloomSettings::NATURAL,
         PlayerCamera,
+        ViewBobTimer {
+            timer: 0.0
+        },
         VolumetricFogSettings {
             // This value is explicitly set to 0 since we have no environment map light
             ambient_intensity: 0.0,
@@ -119,6 +119,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         // default render layer is 0
         RenderLayers::from_layers(&[0, 1])
     ));});
+
     let mut minimap_transform = Transform::from_xyz(10.0, 212.0, 16.0);
     minimap_transform.look_at(Vec3::new(10.0, 12.0, 16.0), Vec3::Y);
     commands.spawn((
@@ -138,7 +139,7 @@ fn setup_camera(mut commands: Commands, /*temporary */mut meshes: ResMut<Assets<
         },
         MinimapCamera,
         RenderLayers::from_layers(&[0, 2])
-    ));
+));
     commands.spawn((
         PbrBundle {
             mesh: cube_mesh.clone(),
@@ -236,7 +237,7 @@ fn move_camera(
             Query<(&Transform, &LinearVelocity), (With<PlayerRigidbody>, Without<PlayerCamera>)>,
             Query<(&mut Transform, &mut ViewBobTimer), (With<PlayerCamera>, Without<PlayerRigidbody>)>,
             Query<&mut Window, With<PrimaryWindow>>,
-            Query<(&mut Camera, &mut Transform), (With<MinimapCamera>, Without<PlayerCamera>, Without<PlayerRigidbody>)>
+            Query<&mut Transform, (With<MinimapCamera>, Without<PlayerCamera>, Without<PlayerRigidbody>)>
         ),
     (keys, mut paused, game_state, keybinds): (Res<ButtonInput<KeyCode>>, ResMut<NextState<GameState>>, Res<State<GameState>>, Res<Keybinds>)
 ) {
@@ -247,14 +248,13 @@ fn move_camera(
             let Ok((rigidbody_transform, rigidbody_velocity)) = rigidbody.get_single() else {todo!()};
             // TODO: migrate the following code into other functions
 
-            for (_, mut minimaptransform) in minimap_camera_query.iter_mut() {
-                minimaptransform.translation.x = transform.translation.x;
-                minimaptransform.translation.y = transform.translation.y + 500.0;
-                minimaptransform.translation.z = transform.translation.z;
+            for mut minimaptransform in minimap_camera_query.iter_mut() {
+                minimaptransform.translation.x = rigidbody_transform.translation.x;
+                minimaptransform.translation.y = rigidbody_transform.translation.y + 500.0;
+                minimaptransform.translation.z = rigidbody_transform.translation.z;
             }
 
-            //TODO: fix viewbob
-            transform.translation.y = rigidbody_transform.translation.y + (view_bob_timer.timer * 0.2).sin() * 0.2 + 0.2;
+            //transform.translation.y = rigidbody_transform.translation.y + (view_bob_timer.timer * 0.2).sin() * 0.2 + 0.2;
 
             view_bob_timer.timer += rigidbody_velocity.length();
 
@@ -314,25 +314,25 @@ fn setup_minimap(
 
 fn update_minimap(
     mut gizmos: Gizmos,
-    player_query: Query<&Transform, With<PlayerCamera>>,
+    player_query: Query<&GlobalTransform, With<PlayerRigidbody>>,
 ) {
-    for transform in player_query.iter() {
-        
-        gizmos.primitive_3d(
-            &Polyline3d::<3>::new(vec!(
-                Vec3::new(-0.5, 0.0, 0.5),
-                Vec3::new(0.0, 0.0, -0.5),
-                Vec3::new(0.5, 0.0, 0.5),
-            )),
-            Vec3::new(
-                transform.translation.x,
-                transform.translation.y + 480.0,
-                transform.translation.z
-            ),
-            Quat::from_euler(EulerRot::XYZ, 0.0, transform.rotation.y, 0.0),
-            Color::srgb(0.0, 1.0, 0.0)
-        )
-    }
+    let global_transform = player_query.get_single().unwrap();
+    let transform = global_transform.compute_transform();
+
+    gizmos.primitive_3d(
+        &Polyline3d::<3>::new(vec!(
+            Vec3::new(-0.5, 0.0, 0.5),
+            Vec3::new(0.0, 0.0, -0.5),
+            Vec3::new(0.5, 0.0, 0.5),
+        )),
+        Vec3::new(
+            transform.translation.x,
+            transform.translation.y + 480.0,
+            transform.translation.z
+        ),
+        Quat::from_rotation_y(transform.rotation.to_euler(EulerRot::YXZ).0),
+        Color::srgb(0.0, 1.0, 0.0)
+    );
 }
 
 fn select_subcollider(
@@ -389,7 +389,11 @@ fn spawn_map(
     }, NotShadowCaster));
 
     let scene = gltf.get(&handles.map_gltf).unwrap();
-    let mesh = assets.get_mut(&mut gltf_assets.get_mut(&scene.meshes[0]).unwrap().primitives[1].mesh);
+    let mut meshes = Vec::new();
+
+    for mut primitive in gltf_assets.get_mut(&scene.meshes[0]).unwrap().primitives.clone() {
+        meshes.push(assets.get_mut(&mut primitive.mesh).unwrap().clone());
+    }
 
     commands.spawn((
         SceneBundle {
@@ -398,11 +402,14 @@ fn spawn_map(
             ..default()
         },
         Subcollider::new(
-            collider_divider::split_subcolliders(&mesh.unwrap(), CHUNK_SIZE),
+            meshes.into_iter().fold(Vec::new(), |mut accumulator, mesh| {
+                accumulator.extend(collider_divider::split_subcolliders(&mesh, CHUNK_SIZE));
+                accumulator
+            }),
             10.0,
         ),
         RigidBody::Static,
-        CollisionMargin(0.2),
+        CollisionMargin(0.4),
     ))
     .with_children(|children| {
         children.spawn(SpotLightBundle {
@@ -511,7 +518,7 @@ fn main() {
             }),
             LogDiagnosticsPlugin::default()
         ))
-        .add_plugins(WorldInspectorPlugin::new())
+        //.add_plugins(WorldInspectorPlugin::new())
         .add_plugins(AutoExposurePlugin)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(CharacterControllerPlugin);
