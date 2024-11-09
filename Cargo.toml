@@ -8,8 +8,7 @@ resolver = "2"
 
 [dependencies]
 # Make sure to remove dynamic_linking for release builds - unless you want to put the linker into the executable
-bevy = {version = "0.14.1", features = ["dynamic_linking"]}
-bevy-inspector-egui = "0.25.0"
+bevy = {version = "0.14.1"}
 image = "0.24"
 winit = "0.30"
 avian3d = { version = "0.1.2", features = ["bevy_scene", "collider-from-mesh", "parallel", "parry-f32", "debug-plugin", "simd"], default-features = false }
@@ -24,10 +23,6 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 debug = 1
-
-[profile.release]
-lto = "fat"
-
 
 [[bin]]
 name = "voyage-abeon"

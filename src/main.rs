@@ -1,3 +1,6 @@
+// hide windows terminal
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod character_controller;
 mod collider_divider;
 
@@ -11,7 +14,6 @@ use bevy::{
     asset::LoadState,
     pbr::{VolumetricFogSettings, VolumetricLight, ShadowFilteringMethod, CascadeShadowConfigBuilder, NotShadowCaster},
 };
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use avian3d::{math::*, prelude::*};
 use winit::window::Icon;
 use character_controller::*;
